@@ -71,11 +71,6 @@ void main()
   
   if (t < 0.0)
    t = 1.0;
-  float r = t * t * t;
-  float g = t * t;
-  float b = t * zoom;
-  float a = 1.0 * zoom;
-  Outcolor = vec4(r, g, b, a);
+  Outcolor = vec4(float(t * t)/* * sin(u_time * 900.0) */,  float(t * t), float(t) * zoom, 1.0 * zoom);
   //Outcolor = vec4(zoom * 0.00);
 }
-
