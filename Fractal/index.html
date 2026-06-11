@@ -1,18 +1,17 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <script src="dat.gui.min.js"></script>
     <style>
-        body
+        body 
         {
-          margin: 0;
-          padding: 10px;
-          background: #000;
-          color: white;
+            margin: 0;
+            padding: 10px;
+            background: #000;
+            color: white;
         }
         canvas
         {
-          display: block;
+            display: block;
         }
     </style>
 </head>
@@ -41,8 +40,6 @@
         function initGL(canvas)
         {
             gl = canvas.getContext("webgl2");
-            canvas.width = 800;
-            canvas.height = 800;
             gl.viewport(0, 0, canvas.width, canvas.height);
             return true;
         }
@@ -68,7 +65,7 @@
             vec2 z = vec2(0.0, 0.0);
             
             int iterations = 0;
-            for (int i = 0; i < 4000; i++)
+            for (int i = 0; i < 700; i++)
             {
                 if (z.x * z.x + z.y * z.y > 7.0)
                    break;
@@ -78,17 +75,15 @@
                 iterations++;
             }
             
-            vec3 color;
             float t = float(iterations) / 256.0;
-            color = vec3(t * t * t * t, t * t * t, t);
+            vec3 color = vec3(t * t * t * t, t * t * t, t);
             Outcolor = vec4(color, 1.0);
         }`;
 
         const shaderVs = `#version 300 es
         precision highp float;
         layout (location = 0) in vec2 a_pos;
-
-        void main() 
+        void main()
         {
             gl_Position = vec4(a_pos, 0.0, 1.0);
         }`;
@@ -136,17 +131,18 @@
         }
 
         let vertexBuffer;
-        function initBuffer() 
+        function initBuffer()
         {
             vertexBuffer = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-            let vertices = new Float32Array([-1, -1, 1, -1, -1,  1, 1,  1]);
+            let vertices = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
             gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
         }
         
         function drawScene()
         {
-            if (!gl || !program) return;
+            if (!gl || !program)
+              return;
             
             gl.clearColor(0.0, 0.0, 0.0, 1.0);
             gl.clear(gl.COLOR_BUFFER_BIT);
@@ -169,8 +165,7 @@
             requestAnimationFrame(drawScene);
         }
 
-        canvas.addEventListener("mousedown", (e) =>
-        {
+        canvas.addEventListener("mousedown", (e) => {
             dragging = true;
             lastX = e.clientX;
             lastY = e.clientY; 
@@ -179,15 +174,19 @@
 
         window.addEventListener("mousemove", (e) =>
         {
-            if (!dragging)
-              return;
+            if (!dragging) return;
             
             let dx = e.clientX - lastX;
             let dy = e.clientY - lastY;
+            
+            let rect = canvas.getBoundingClientRect();
+            let scaleX = canvas.width / rect.width;
+            let scaleY = canvas.height / rect.height;
+            
             let aspect = canvas.width / canvas.height;
             
-            centerX -= dx * 3.5 * aspect / (canvas.width * zoom);
-            centerY += dy * 3.5 / (canvas.height * zoom);
+            centerX -= dx * scaleX * 3.5 * aspect / (canvas.width * zoom);
+            centerY += dy * scaleY * 3.5 / (canvas.height * zoom);
 
             lastX = e.clientX;
             lastY = e.clientY;
@@ -203,73 +202,38 @@
             e.preventDefault();
             
             let rect = canvas.getBoundingClientRect();
-            let mouseX = e.clientX - rect.left;
-            let mouseY = e.clientY - rect.top;
             
-
-            let normX = mouseX / canvas.width;
-            let normY = mouseY / canvas.height;
+            let mouseCanvasX = (e.clientX - rect.left) * (canvas.width / rect.width);
+            let mouseCanvasY = (e.clientY - rect.top) * (canvas.height / rect.height);
+            
+            let nx = mouseCanvasX / canvas.width;
+            let ny = 1.0 - (mouseCanvasY / canvas.height);
             
             let aspect = canvas.width / canvas.height;
             
-            let worldX = (normX - 0.5) * 3.5 * aspect / zoom;
-            let worldY = (normY - 0.5) * 3.5 / zoom;
-            let worldMouseX = centerX + worldX;
-            let worldMouseY = centerY + worldY;
+            let worldX = (nx - 0.5) * 3.5 * aspect / zoom;
+            let worldY = (ny - 0.5) * 3.5 / zoom;
             
             let zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
             zoom *= zoomFactor;
-            zoom = Math.min(90000.0, Math.max(0.001, zoom));
+            zoom = Math.min(90000000.0, Math.max(0.001, zoom));
             
-            let newWorldX = (normX - 0.5) * 3.5 * aspect / zoom;
-            let newWorldY = (normY - 0.5) * 3.5 / zoom;
+            let newWorldX = (nx - 0.5) * 3.5 * aspect / zoom;
+            let newWorldY = (ny - 0.5) * 3.5 / zoom;
             
-            centerX = worldMouseX - newWorldX;
-            centerY = worldMouseY - newWorldY;
+            centerX += worldX - newWorldX;
+            centerY += worldY - newWorldY;
         });
         
-        function zoomIn()
-        {
-            let rect = canvas.getBoundingClientRect();
-            let centerNormX = 0.5;
-            let centerNormY = 0.5;
-            let aspect = canvas.width / canvas.height;
-            
-            let worldX = (centerNormX - 0.5) * 3.5 * aspect / zoom;
-            let worldY = (centerNormY - 0.5) * 3.5 / zoom;
-            let worldMouseX = centerX + worldX;
-            let worldMouseY = centerY + worldY;
-            
+        function zoomIn() {
             zoom *= 1.5;
             zoom = Math.min(90000, zoom);
-            
-            let newWorldX = (centerNormX - 0.5) * 3.5 * aspect / zoom;
-            let newWorldY = (centerNormY - 0.5) * 3.5 / zoom;
-            
-            centerX = worldMouseX - newWorldX;
-            centerY = worldMouseY - newWorldY;
         }
         
         function zoomOut()
         {
-            let rect = canvas.getBoundingClientRect();
-            let centerNormX = 0.5;
-            let centerNormY = 0.5;
-            let aspect = canvas.width / canvas.height;
-            
-            let worldX = (centerNormX - 0.5) * 3.5 * aspect / zoom;
-            let worldY = (centerNormY - 0.5) * 3.5 / zoom;
-            let worldMouseX = centerX + worldX;
-            let worldMouseY = centerY + worldY;
-            
             zoom /= 1.5;
             zoom = Math.max(0.001, zoom);
-            
-            let newWorldX = (centerNormX - 0.5) * 3.5 * aspect / zoom;
-            let newWorldY = (centerNormY - 0.5) * 3.5 / zoom;
-            
-            centerX = worldMouseX - newWorldX;
-            centerY = worldMouseY - newWorldY;
         }
         
         function resetView()
