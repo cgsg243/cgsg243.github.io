@@ -64,7 +64,7 @@ const io = new Server(server, {
 
 const PST_COINS_FOR_NEXT_LEVEL = 250;
 
-const LEVEL_MAPS = {
+const PST_LEVEL_MAPS = {
     1: [
         [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
         [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1],
@@ -148,12 +148,6 @@ const LEVEL_GHOST_CONFIGS = {
     3: ['red', 'blue', 'orange', 'pink', 'blinky', 'phantom']
 };
 
-// const LEVEL_CONFIGS = {
-//     1: { ghostSpeed: 1.5 },
-//     2: { ghostSpeed: 2.0 },
-//     3: { ghostSpeed: 2.5 }
-// };
-
 const PST_FRUIT_TYPES = [
     { name: 'cherry', points: 100 },
     { name: 'strawberry', points: 200 },
@@ -167,7 +161,7 @@ const PST_FRUIT_TYPES = [
 
 let players = {};
 let currentLevel = 1;
-let currentMap = JSON.parse(JSON.stringify(LEVEL_MAPS[currentLevel]));
+let currentMap = JSON.parse(JSON.stringify(PST_LEVEL_MAPS[currentLevel]));
 
 let currentFruit = null;
 let fruitSpawnTimer = 10;
@@ -213,9 +207,8 @@ function isTileValid(map, x, y)
 function isTileWall(map, x, y)
 {
     if (!isTileValid(map, x, y))
-    {
         return true;
-    }
+
     return map[y][x] === 1;
 }
 
@@ -284,15 +277,19 @@ function getAllPlayersData()
     const result = [];
     for (let id in players)
     {
-        result.push({
+        const p = players[id];
+        const playerData = {
             id: id,
-            nickname: players[id].nickname || 'Player',
-            pacman: players[id].pacman || { x: 3, y: 3 },
-            score: players[id].score || 0,
-            lives: players[id].lives || 3,
-            level: players[id].playerLevel || 1,
-            isWinner: players[id].isWinner || false
-        });
+            nickname: p.nickname || 'Player',
+            pacman: p.pacman || { x: 3, y: 3 },
+            dirX: p.dirX || 1,
+            dirY: p.dirY || 0,
+            score: p.score || 0,
+            lives: p.lives || 3,
+            level: p.playerLevel || 1,
+            isWinner: p.isWinner || false
+        };
+        result.push(playerData);
     }
     return result;
 }
@@ -323,7 +320,7 @@ function checkWinCondition(playerId)
     if (!player)
       return false;
 
-    const maxLevel = Object.keys(LEVEL_MAPS).length;
+    const maxLevel = Object.keys(PST_LEVEL_MAPS).length;
     if (player.playerLevel === maxLevel && player.collectedCoins >= PST_COINS_FOR_NEXT_LEVEL)
         return true;
 
@@ -351,8 +348,6 @@ function declareWinner(playerId)
         score: player.score,
         level: player.playerLevel
     });
-
-    console.log('Player ' + player.nickname + ' won the game!');
 }
 
 function resetGameForPlayer(playerId)
@@ -363,9 +358,11 @@ function resetGameForPlayer(playerId)
       return;
 
     player.playerLevel = 1;
-    player.playerMap = JSON.parse(JSON.stringify(LEVEL_MAPS[1]));
+    player.playerMap = JSON.parse(JSON.stringify(PST_LEVEL_MAPS[1]));
     player.collectedCoins = 0;
     player.pacman = { x: 3, y: 3 };
+    player.dirX = 1;
+    player.dirY = 0;
     player.ghosts = createGhostsForLevel(1);
     player.isWinner = false;
     player.score = 0;
@@ -388,10 +385,8 @@ function resetGameForPlayer(playerId)
         collectedCoins: 0,
         score: 0,
         lives: 3,
-        maxLevel: Object.keys(LEVEL_MAPS).length
+        maxLevel: Object.keys(PST_LEVEL_MAPS).length
     });
-
-    console.log('Player ' + player.nickname + ' reset game to level 1');
 }
 
 function updatePlayerGhosts(playerId)
@@ -581,20 +576,45 @@ setInterval(() =>
 
 io.on("connection", (socket) =>
 {
-    console.log('Client connected: ' + socket.id);
-
     socket.on("register", (data) =>
     {
-        const nickname = (data && data.nickname && data.nickname.trim()) || 'Player';
+        if (players[socket.id])
+        {
+            const player = players[socket.id];
+            const ghostData = player.ghosts.map(g => ({
+                x: g.x,
+                y: g.y,
+                dirX: g.lastDirX || g.dirX || 0,
+                dirY: g.lastDirY || g.dirY || 0,
+                type: g.type
+            }));
 
+            const initData = {
+                id: socket.id,
+                players: getAllPlayersData(),
+                ghosts: ghostData,
+                level: player.playerLevel,
+                mazeGrid: player.playerMap,
+                coinsForNextLevel: PST_COINS_FOR_NEXT_LEVEL,
+                collectedCoins: player.collectedCoins || 0,
+                maxLevel: Object.keys(PST_LEVEL_MAPS).length
+            };
+            
+            socket.emit("init", initData);
+            return;
+        }
+
+        const nickname = (data && data.nickname && data.nickname.trim()) || 'Player';
         const playerLevel = currentLevel;
-        const playerMap = JSON.parse(JSON.stringify(LEVEL_MAPS[playerLevel]));
+        const playerMap = JSON.parse(JSON.stringify(PST_LEVEL_MAPS[playerLevel]));
 
         players[socket.id] =
         {
             socket: socket,
             nickname: nickname,
             pacman: { x: 3, y: 3 },
+            dirX: 1,
+            dirY: 0,
             score: 0,
             lives: 3,
             collectedCoins: 0,
@@ -604,8 +624,6 @@ io.on("connection", (socket) =>
             isWinner: false
         };
 
-        console.log('Player registered: ' + nickname + ' (' + socket.id + ')');
-
         const ghostData = players[socket.id].ghosts.map(g => ({
             x: g.x,
             y: g.y,
@@ -614,17 +632,20 @@ io.on("connection", (socket) =>
             type: g.type
         }));
 
-        socket.emit("init",
-        {
+        const allPlayersData = getAllPlayersData();
+
+        const initPayload = {
             id: socket.id,
-            players: getAllPlayersData(),
+            players: allPlayersData,
             ghosts: ghostData,
             level: playerLevel,
             mazeGrid: playerMap,
             coinsForNextLevel: PST_COINS_FOR_NEXT_LEVEL,
-            collectedCoins: players[socket.id].collectedCoins,
-            maxLevel: Object.keys(LEVEL_MAPS).length
-        });
+            collectedCoins: 0,
+            maxLevel: Object.keys(PST_LEVEL_MAPS).length
+        };
+        
+        socket.emit("init", initPayload);
 
         if (currentFruit && currentFruit.alive)
         {
@@ -636,15 +657,18 @@ io.on("connection", (socket) =>
             });
         }
 
-        socket.broadcast.emit("newPlayer", {
+        const newPlayerData = {
             id: socket.id,
             nickname: nickname,
             pacman: { x: 3, y: 3 },
+            dirX: 1,
+            dirY: 0,
             score: 0,
             lives: 3,
             level: 1
-        });
-
+        };
+        
+        socket.broadcast.emit("newPlayer", newPlayerData);
         socket.emit("messageFromServer", 'Welcome, ' + nickname + '!');
     });
 
@@ -655,6 +679,16 @@ io.on("connection", (socket) =>
             return;
         
         player.pacman = data.pacman || { x: 3, y: 3 };
+        
+        if (typeof data.dirX === 'number' && typeof data.dirY === 'number')
+        {
+            if (data.dirX !== 0 || data.dirY !== 0)
+            {
+                player.dirX = data.dirX;
+                player.dirY = data.dirY;
+            }
+        }
+        
         player.score = data.score || 0;
         player.lives = data.lives || 3;
         if (typeof data.level === 'number')
@@ -664,6 +698,8 @@ io.on("connection", (socket) =>
             id: socket.id,
             nickname: player.nickname,
             pacman: player.pacman,
+            dirX: player.dirX,
+            dirY: player.dirY,
             score: player.score,
             lives: player.lives,
             level: player.playerLevel,
@@ -700,14 +736,16 @@ io.on("connection", (socket) =>
                     return;
                 }
 
-                if (player.playerLevel < Object.keys(LEVEL_MAPS).length)
+                if (player.playerLevel < Object.keys(PST_LEVEL_MAPS).length)
                     player.playerLevel++;
                 else
                     player.playerLevel = 1;
 
-                player.playerMap = JSON.parse(JSON.stringify(LEVEL_MAPS[player.playerLevel]));
+                player.playerMap = JSON.parse(JSON.stringify(PST_LEVEL_MAPS[player.playerLevel]));
                 player.collectedCoins = 0;
                 player.pacman = { x: 3, y: 3 };
+                player.dirX = 1;
+                player.dirY = 0;
                 player.ghosts = createGhostsForLevel(player.playerLevel);
 
                 const ghostData = player.ghosts.map(g => ({
@@ -724,10 +762,8 @@ io.on("connection", (socket) =>
                     ghosts: ghostData,
                     coinsForNextLevel: PST_COINS_FOR_NEXT_LEVEL,
                     collectedCoins: 0,
-                    maxLevel: Object.keys(LEVEL_MAPS).length
+                    maxLevel: Object.keys(PST_LEVEL_MAPS).length
                 });
-
-                console.log('Player ' + player.nickname + ' advanced to level ' + player.playerLevel);
             }
         }
     });
@@ -742,9 +778,7 @@ io.on("connection", (socket) =>
 
     socket.on("fruitCollected", (data) =>
     {
-        if (currentFruit && currentFruit.alive &&
-            Math.abs(currentFruit.x - data.x) < 0.5 &&
-            Math.abs(currentFruit.y - data.y) < 0.5)
+        if (currentFruit && currentFruit.alive && Math.abs(currentFruit.x - data.x) < 0.5 && Math.abs(currentFruit.y - data.y) < 0.5)
         {
             currentFruit.alive = false;
             
@@ -770,7 +804,7 @@ io.on("connection", (socket) =>
         const player = players[socket.id];
 
         if (!player)
-            return;
+          return;
 
         player.lives = data.lives || 0;
         socket.broadcast.emit("playerDied", {
@@ -811,7 +845,6 @@ io.on("connection", (socket) =>
         if (!player)
             return;
 
-        console.log(player.nickname + ': ' + msg);
         broadcastToAll("messageFromServer", player.nickname + ': ' + msg);
     });
 
@@ -823,14 +856,31 @@ io.on("connection", (socket) =>
           return;
 
         resetGameForPlayer(socket.id);
-        console.log('Player ' + player.nickname + ' reset the game');
+    });
+
+    socket.on("resetGhostPositions", (data) =>
+    {
+        const player = players[socket.id];
+
+        if (!player)
+           return;
+
+        player.ghosts = createGhostsForLevel(player.playerLevel);
+        
+        const ghostData = player.ghosts.map(g => ({
+            x: g.x,
+            y: g.y,
+            dirX: g.lastDirX || g.dirX || 0,
+            dirY: g.lastDirY || g.dirY || 0,
+            type: g.type
+        }));
+
+        socket.emit('ghostsUpdate', { ghosts: ghostData, level: player.playerLevel });
     });
 
     socket.on("disconnect", () =>
     {
         const player = players[socket.id];
-
-        console.log('Client disconnected: ' + socket.id);
 
         if (player)
         {
@@ -847,5 +897,4 @@ server.listen(PORT, "0.0.0.0", () =>
     console.log('Server started on port ' + PORT);
     console.log('http://localhost:' + PORT);
     console.log('http://127.0.0.1:' + PORT);
-    console.log(PST_COINS_FOR_NEXT_LEVEL + ' coins needed for next level');
 });

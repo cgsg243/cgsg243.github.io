@@ -72,7 +72,8 @@ export class Pst_Sprite
                 @group(0) @binding(1) var t: texture_2d<f32>;
                 @group(0) @binding(2) var s: sampler;
 
-                struct VertexOutput {
+                struct VertexOutput
+                {
                     @builtin(position) pos: vec4f,
                     @location(0) uv: vec2f,
                 }

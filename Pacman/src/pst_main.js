@@ -57,6 +57,10 @@ let showWinnerScreen = false;
 let winnerTimer = 0;
 const WINNER_SCREEN_DURATION = 5.0;
 
+const playerRenderIndices = {};
+
+let frameCount = 0;
+
 function removeNicknameLabel(id)
 {
     if (nicknameLabels[id])
@@ -127,7 +131,7 @@ function hashCode(str)
 
     for (let i = 0; i < str.length; i++)
     {
-        hash = ((hash << 5) - hash) + str.charCodeAt(i);
+        hash = ((hash << 2) - hash) + str.charCodeAt(i);
         hash |= 0;
     }
 
@@ -213,6 +217,18 @@ function rebuildMazeMesh(maze, device)
     maze.setMesh(newMesh);
 }
 
+
+function assignRenderIndex(id)
+{
+    if (playerRenderIndices[id] === undefined)
+    {
+        const existingCount = Object.keys(playerRenderIndices).length;
+        const index = existingCount % PST_MAX_PLAYERS;
+        playerRenderIndices[id] = index;
+    }
+    return playerRenderIndices[id];
+}
+
 (async () =>
 {
     const nickname = await new Promise((resolve) =>
@@ -254,36 +270,23 @@ function rebuildMazeMesh(maze, device)
         nicknameInput.focus();
     });
 
-    console.log('Player nickname:', nickname);
-
     const canvas = document.getElementById('game');
 
     if (!canvas)
-    {
-        console.error('Canvas element not found');
         return;
-    }
 
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
-    console.log('Waiting for WebGPU initialization...');
-
     await new Promise(resolve => setTimeout(resolve, 100));
 
     if (!navigator.gpu)
-    {
-        console.error('WebGPU not supported');
         return;
-    }
 
     const adapter = await navigator.gpu.requestAdapter();
 
     if (!adapter)
-    {
-        console.error('No WebGPU adapter found');
         return;
-    }
 
     const device = await adapter.requestDevice();
     const context = canvas.getContext('webgpu');
@@ -291,39 +294,29 @@ function rebuildMazeMesh(maze, device)
 
     context.configure({ device, format });
 
-    console.log('WebGPU initialized successfully!');
-    console.log('Connecting to Socket.IO server...');
-
     await new Promise((resolve) =>
     {
         if (typeof io !== 'undefined')
         {
-            console.log('Socket.IO already loaded');
             resolve();
             return;
         }
-
-        console.log('Loading Socket.IO client...');
 
         const script = document.createElement('script');
 
         script.src = '/socket.io/socket.io.js';
         script.onload = () =>
         {
-            console.log('Socket.IO loaded from server');
             resolve();
         };
         script.onerror = () =>
         {
-            console.error('Failed to load Socket.IO client');
             resolve();
         };
         document.head.appendChild(script);
     });
 
     const socketUrl = window.location.origin;
-
-    console.log('Connecting to:', socketUrl);
 
     socket = io(socketUrl,
     {
@@ -337,32 +330,27 @@ function rebuildMazeMesh(maze, device)
 
     socket.on('connect', () =>
     {
-        console.log('Socket.IO connected! ID:', socket.id);
         isConnected = true;
         
         if (gameReady)
-        {
-            console.log('Reconnecting to game...');
             socket.emit('register', { nickname: nickname });
-        }
     });
 
     socket.on('connect_error', (error) =>
     {
-        console.error('Socket.IO connection error:', error);
-        console.log('Trying to reconnect...');
     });
 
     socket.on('disconnect', () =>
     {
-        console.log('Socket.IO disconnected');
         isConnected = false;
     });
-
+    
     socket.on('newPlayer', (data) =>
     {
         if (data.id !== myId)
         {
+            const renderIdx = assignRenderIndex(data.id);
+
             remotePlayers[data.id] =
             {
                 nickname: data.nickname || 'Player',
@@ -371,42 +359,54 @@ function rebuildMazeMesh(maze, device)
                     x: (data.pacman && typeof data.pacman.x === 'number') ? data.pacman.x : 3,
                     y: (data.pacman && typeof data.pacman.y === 'number') ? data.pacman.y : 3
                 },
+                dirX: (typeof data.dirX === 'number') ? data.dirX : 1,
+                dirY: (typeof data.dirY === 'number') ? data.dirY : 0,
                 score: data.score || 0,
                 lives: data.lives || 3,
                 level: data.level || 1,
-                isWinner: false
+                isWinner: false,
+                renderIndex: renderIdx
             };
-            console.log('New player:', data.nickname);
         }
     });
 
     socket.on('update', (data) =>
     {
-        if (data.id !== myId && remotePlayers[data.id])
+        if (data.id !== myId)
         {
-            if (data.nickname)
-                remotePlayers[data.id].nickname = data.nickname;
-
-            if (data.pacman && typeof data.pacman.x === 'number')
+            if (!remotePlayers[data.id])
             {
-                remotePlayers[data.id].pacman =
+                const renderIdx = assignRenderIndex(data.id);
+                remotePlayers[data.id] =
                 {
-                    x: data.pacman.x,
-                    y: data.pacman.y
+                    nickname: data.nickname || 'Player',
+                    pacman: { x: 3, y: 3 },
+                    dirX: 1,
+                    dirY: 0,
+                    score: 0,
+                    lives: 3,
+                    level: 1,
+                    isWinner: false,
+                    renderIndex: renderIdx
                 };
             }
 
-            if (typeof data.score === 'number')
-                remotePlayers[data.id].score = data.score;
+            const rp = remotePlayers[data.id];
 
-            if (typeof data.lives === 'number')
-                remotePlayers[data.id].lives = data.lives;
-
-            if (typeof data.level === 'number')
-                remotePlayers[data.id].level = data.level;
-
-            if (typeof data.isWinner === 'boolean')
-                remotePlayers[data.id].isWinner = data.isWinner;
+            if (data.nickname) rp.nickname = data.nickname;
+            if (data.pacman && typeof data.pacman.x === 'number')
+            {
+                rp.pacman = { x: data.pacman.x, y: data.pacman.y };
+            }
+            if (typeof data.dirX === 'number' && typeof data.dirY === 'number')
+            {
+                rp.dirX = data.dirX;
+                rp.dirY = data.dirY;
+            }
+            if (typeof data.score === 'number') rp.score = data.score;
+            if (typeof data.lives === 'number') rp.lives = data.lives;
+            if (typeof data.level === 'number') rp.level = data.level;
+            if (typeof data.isWinner === 'boolean') rp.isWinner = data.isWinner;
         }
     });
 
@@ -420,7 +420,8 @@ function rebuildMazeMesh(maze, device)
     {
         removeNicknameLabel(data.id);
         delete remotePlayers[data.id];
-        console.log('Player left:', data.id);
+        if (playerRenderIndices[data.id] !== undefined)
+            delete playerRenderIndices[data.id];
     });
 
     socket.on('ghostsUpdate', (data) =>
@@ -463,7 +464,6 @@ function rebuildMazeMesh(maze, device)
 
     socket.on('messageFromServer', (msg) =>
     {
-        console.log('Server message:', msg);
     });
 
     socket.on('fruitSpawned', (data) =>
@@ -476,7 +476,6 @@ function rebuildMazeMesh(maze, device)
             points: data.points,
             alive: true
         };
-        console.log('Fruit spawned:', data.name, 'at', data.x, data.y);
     });
 
     socket.on('fruitExpired', (data) =>
@@ -489,6 +488,12 @@ function rebuildMazeMesh(maze, device)
     {
         if (serverFruit && serverFruit.x === data.x && serverFruit.y === data.y)
             serverFruit = null;
+    });
+
+    socket.on('levelData', (data) =>
+    {
+        if (remotePlayers[data.id])
+            remotePlayers[data.id].level = data.level;
     });
 
     socket.on('gameWinner', (data) =>
@@ -530,7 +535,6 @@ function rebuildMazeMesh(maze, device)
 
     socket.on('youWon', (data) =>
     {
-        console.log('You won! Score:', data.score, 'Level:', data.level);
     });
 
     socket.on('gameReset', (data) =>
@@ -550,13 +554,17 @@ function rebuildMazeMesh(maze, device)
         if (youWonMsg)
            youWonMsg.remove();
         
+        const gameOverEl = document.getElementById('game-over');
+        if (gameOverEl)
+            gameOverEl.style.display = 'none';
+        
         restartBtn.style.display = 'block';
         
         if (data.mazeGrid)
         {
             maze.setGrid(data.mazeGrid);
             rebuildMazeMesh(maze, device);
-            coins = rebuildCoins(maze, device, layout);
+            coins = rebuildCoins(maze, device, mazeLayout);
             superCoins = generateSuperCoins(maze, PST_SUPER_COIN_COUNT);
         }
         
@@ -578,7 +586,6 @@ function rebuildMazeMesh(maze, device)
         
         updateUI();
         showReadyMessage();
-        console.log('Game reset to level 1');
     });
 
     await new Promise((resolve) =>
@@ -592,7 +599,6 @@ function rebuildMazeMesh(maze, device)
             if (isConnected || attempts > 50)
             {
                 clearInterval(checkInterval);
-                console.log('Socket.IO connected:', isConnected);
                 resolve();
             }
         }, 100);
@@ -604,11 +610,16 @@ function rebuildMazeMesh(maze, device)
 
     const maze = new Pst_Maze();
     const mazeShader = pst_createShaderModule(device);
-    const layout = device.createBindGroupLayout({
+
+    const mazeLayout = device.createBindGroupLayout({
         entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: {} }],
     });
 
-    const mazePipeline = pst_createPipeline(device, mazeShader, layout, format);
+    const playerLayout = device.createBindGroupLayout({
+        entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} }],
+    });
+
+    const mazePipeline = pst_createPipeline(device, mazeShader, mazeLayout, format);
     const mazeMesh = Pst_Mesh.createMaze(device, maze);
 
     maze.setMesh(mazeMesh);
@@ -687,20 +698,13 @@ function rebuildMazeMesh(maze, device)
             if (youWonMsg)
                youWonMsg.remove();
             
-            const level1Map = LEVEL_MAPS ? LEVEL_MAPS[1] : null;
-            if (level1Map)
-            {
-                maze.setGrid(level1Map);
-                rebuildMazeMesh(maze, device);
-                coins = rebuildCoins(maze, device, layout);
-                superCoins = generateSuperCoins(maze, PST_SUPER_COIN_COUNT);
-            }
+            const gameOverEl = document.getElementById('game-over');
+            if (gameOverEl)
+                gameOverEl.style.display = 'none';
             
             restartBtn.style.display = 'none';
             updateUI();
             showReadyMessage();
-            
-            console.log('Game restarted to level 1');
         }
     };
     document.body.appendChild(restartBtn);
@@ -714,11 +718,9 @@ function rebuildMazeMesh(maze, device)
     {
         await coinSprite.loadFromFile(device, null, format, `/targets/pill.png`);
         coinSprite.frames = 1;
-        console.log('coinSprite loaded successfully!');
     }
     catch (err)
     {
-        console.error('Failed to load pill.png:', err);
     }
 
     superCoinSprites = [];
@@ -736,7 +738,6 @@ function rebuildMazeMesh(maze, device)
         }
         catch (err)
         {
-            console.warn('Failed to load super coin sprite:', err);
             if (coinSprite.texture)
                 superCoinSprites.push(coinSprite);
         }
@@ -762,7 +763,6 @@ function rebuildMazeMesh(maze, device)
         }
         catch (err)
         {
-            console.error(`Failed to load fruit sprite: ${name}`, err);
         }
     }
 
@@ -800,7 +800,6 @@ function rebuildMazeMesh(maze, device)
             }
             catch (err)
             {
-                console.warn(`Failed to load ghost frame: ${path}/frame_${i}.png`, err);
                 arr.push(null);
             }
         }
@@ -820,7 +819,6 @@ function rebuildMazeMesh(maze, device)
         }
         catch (err)
         {
-            console.warn(`Failed to load pacman frame: ${i}`, err);
             pacmanFrames.push(null);
         }
     }
@@ -839,7 +837,6 @@ function rebuildMazeMesh(maze, device)
         }
         catch (err)
         {
-            console.warn(`Failed to load death frame: ${i}`, err);
             deathFrames.push(null);
         }
     }
@@ -850,15 +847,13 @@ function rebuildMazeMesh(maze, device)
     {
         await readySprite.loadFromFile(device, null, format, `/targets/ready.png`);
         readySprite.frames = 1;
-        console.log('Ready sprite loaded successfully!');
     }
     catch (err)
     {
-        console.warn('Failed to load ready sprite:', err);
     }
 
     const mazeUB = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const mazeBG = device.createBindGroup({ layout, entries: [{ binding: 0, resource: { buffer: mazeUB } }] });
+    const mazeBG = device.createBindGroup({ layout: mazeLayout, entries: [{ binding: 0, resource: { buffer: mazeUB } }] });
 
     const coinShader = device.createShaderModule({
         code: `
@@ -881,14 +876,11 @@ function rebuildMazeMesh(maze, device)
             }
         `
     });
-    const coinPipeline = pst_createPipeline(device, coinShader, layout, format);
+    const coinPipeline = pst_createPipeline(device, coinShader, mazeLayout, format);
 
-    let coins = rebuildCoins(maze, device, layout);
-
-    console.log('Total coins:', coins.length);
+    let coins = rebuildCoins(maze, device, mazeLayout);
 
     superCoins = generateSuperCoins(maze, PST_SUPER_COIN_COUNT);
-    console.log('Super coins generated:', superCoins.length);
 
     const playerColors =
     [
@@ -904,46 +896,61 @@ function rebuildMazeMesh(maze, device)
         [0.7, 1, 0.7],
     ];
 
-    const playerPipelines = [];
-    const playerUBs = [];
-    const playerBGs = [];
+    const playerShader = device.createShaderModule({
+        code: `
+            struct Uniforms
+            {
+                model: mat4x4f,
+                color: vec3f,
+            }
+            @group(0) @binding(0) var<uniform> u: Uniforms;
 
-    for (let i = 0; i < PST_MAX_PLAYERS; i++)
-    {
-        const colorIndex = i % playerColors.length;
-        const r = playerColors[colorIndex][0];
-        const g = playerColors[colorIndex][1];
-        const b = playerColors[colorIndex][2];
+            @vertex
+            fn vs(@location(0) pos: vec3f) -> @builtin(position) vec4f
+            {
+                return u.model * vec4f(pos, 1.0);
+            }
 
-        const sh = device.createShaderModule({
-            code: `
-                struct Uniforms
-                {
-                    model: mat4x4f,
-                }
-                @group(0) @binding(0) var<uniform> u: Uniforms;
+            @fragment
+            fn fs() -> @location(0) vec4f
+            {
+                return vec4f(u.color, 0.4);
+            }
+        `
+    });
 
-                @vertex
-                fn vs(@location(0) pos: vec3f) -> @builtin(position) vec4f
-                {
-                    return u.model * vec4f(pos, 1.0);
-                }
+    const playerPipeline = pst_createPipeline(device, playerShader, playerLayout, format);
 
-                @fragment
-                fn fs() -> @location(0) vec4f
-                {
-                    return vec4f(${r}, ${g}, ${b}, 0.4);
-                }
-            `
-        });
+    const PLAYER_UB_SIZE = 80;
 
-        const pipeline = pst_createPipeline(device, sh, layout, format);
-        const ub = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        const bg = device.createBindGroup({ layout, entries: [{ binding: 0, resource: { buffer: ub } }] });
+    const playerUBs = {};
+    const playerBGs = {};
 
-        playerPipelines.push(pipeline);
-        playerUBs.push(ub);
-        playerBGs.push(bg);
+    function getPlayerBuffers(playerId) {
+        if (!playerUBs[playerId]) {
+            const ub = device.createBuffer({ 
+                size: PLAYER_UB_SIZE, 
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                mappedAtCreation: false
+            });
+            const bg = device.createBindGroup({ 
+                layout: playerLayout, 
+                entries: [{ binding: 0, resource: { buffer: ub } }] 
+            });
+            playerUBs[playerId] = ub;
+            playerBGs[playerId] = bg;
+        }
+        return { ub: playerUBs[playerId], bg: playerBGs[playerId] };
+    }
+
+    function cleanupPlayerBuffers(playerId) {
+        if (playerUBs[playerId]) {
+            playerUBs[playerId].destroy();
+            delete playerUBs[playerId];
+        }
+        if (playerBGs[playerId]) {
+            delete playerBGs[playerId];
+        }
     }
 
     const playerPrim = Pst_Primitive.circle(0.25, 32, 0, 0);
@@ -976,17 +983,20 @@ function rebuildMazeMesh(maze, device)
     socket.on('init', (data) =>
     {
         myId = data.id;
-        console.log('My ID:', myId);
 
         if (data.maxLevel)
-        {
             maxLevel = data.maxLevel;
-        }
 
         restartBtn.style.display = 'block';
 
         for (const key in nicknameLabels)
             removeNicknameLabel(key);
+
+        for (const key in playerRenderIndices)
+            delete playerRenderIndices[key];
+
+        for (const key in playerUBs)
+            cleanupPlayerBuffers(key);
 
         for (const key in remotePlayers)
             delete remotePlayers[key];
@@ -996,9 +1006,13 @@ function rebuildMazeMesh(maze, device)
             for (let i = 0; i < data.players.length; i++)
             {
                 const p = data.players[i];
+                const isMe = p.id === myId;
 
-                if (p.id !== myId)
+                if (!isMe)
                 {
+                    const renderIdx = i - 1;
+                    playerRenderIndices[p.id] = renderIdx;
+
                     remotePlayers[p.id] =
                     {
                         nickname: p.nickname || 'Player',
@@ -1007,10 +1021,13 @@ function rebuildMazeMesh(maze, device)
                             x: (p.pacman && typeof p.pacman.x === 'number') ? p.pacman.x : 3,
                             y: (p.pacman && typeof p.pacman.y === 'number') ? p.pacman.y : 3
                         },
+                        dirX: (typeof p.dirX === 'number') ? p.dirX : 1,
+                        dirY: (typeof p.dirY === 'number') ? p.dirY : 0,
                         score: p.score || 0,
                         lives: p.lives || 3,
                         level: p.level || 1,
-                        isWinner: p.isWinner || false
+                        isWinner: p.isWinner || false,
+                        renderIndex: renderIdx
                     };
                 }
             }
@@ -1031,9 +1048,14 @@ function rebuildMazeMesh(maze, device)
         {
             maze.setGrid(data.mazeGrid);
             rebuildMazeMesh(maze, device);
-            coins = rebuildCoins(maze, device, layout);
+            coins = rebuildCoins(maze, device, mazeLayout);
             superCoins = generateSuperCoins(maze, PST_SUPER_COIN_COUNT);
         }
+        
+        score = data.score || 0;
+        lives = data.lives || 3;
+        currentLevel = data.level || 1;
+        
         showReadyMessage();
     });
 
@@ -1042,9 +1064,7 @@ function rebuildMazeMesh(maze, device)
         currentLevel = data.level;
         
         if (data.maxLevel)
-        {
             maxLevel = data.maxLevel;
-        }
 
         if (!levelTransition)
         {
@@ -1053,12 +1073,10 @@ function rebuildMazeMesh(maze, device)
         }
 
         if (data.mazeGrid)
-        {
             maze.setGrid(data.mazeGrid);
-        }
         
         rebuildMazeMesh(maze, device);
-        coins = rebuildCoins(maze, device, layout);
+        coins = rebuildCoins(maze, device, mazeLayout);
         superCoins = generateSuperCoins(maze, PST_SUPER_COIN_COUNT);
 
         if (data.ghosts && Array.isArray(data.ghosts))
@@ -1074,30 +1092,6 @@ function rebuildMazeMesh(maze, device)
         pacman.setDirection(1, 0);
         ghostsHidden = false;
         serverFruit = null;
-
-        console.log('Level up! Now on level ' + currentLevel);
-    });
-
-    socket.on('levelData', (data) =>
-    {
-        if (data.level)
-            currentLevel = data.level;
-
-        if (data.mazeGrid)
-        {
-            maze.setGrid(data.mazeGrid);
-            rebuildMazeMesh(maze, device);
-            coins = rebuildCoins(maze, device, layout);
-            superCoins = generateSuperCoins(maze, PST_SUPER_COIN_COUNT);
-        }
-
-        if (data.ghosts && Array.isArray(data.ghosts))
-        {
-            remoteGhosts = data.ghosts.filter(function(g)
-            {
-                return g && typeof g.x === 'number' && typeof g.y === 'number';
-            });
-        }
     });
 
     socket.on('gameOver', (data) =>
@@ -1112,9 +1106,7 @@ function rebuildMazeMesh(maze, device)
             restartBtn.style.color = '#FF4444';
         }
         if (remotePlayers[data.id])
-        {
             remotePlayers[data.id].lives = 0;
-        }
         updateUI();
     });
 
@@ -1171,6 +1163,14 @@ function rebuildMazeMesh(maze, device)
         pacman.tileY = 3;
         pacman.setDirection(1, 0);
 
+        if (socket && socket.connected)
+        {
+            socket.emit('resetGhostPositions', {
+                playerX: 3,
+                playerY: 3
+            });
+        }
+
         if (lives <= 0)
         {
             startDeathAnimation(deathPosX, deathPosY, true);
@@ -1187,12 +1187,11 @@ function rebuildMazeMesh(maze, device)
 
             if (socket && socket.connected)
                 socket.emit('playerDied', { lives });
-
         }
 
         updateUI();
     }
-
+    
     function checkCoinCollection()
     {
         if (isDying)
@@ -1207,7 +1206,7 @@ function rebuildMazeMesh(maze, device)
             score += 10;
 
             if (pacman.onEatCoin)
-               pacman.onEatCoin();
+                pacman.onEatCoin();
 
             if (socket && socket.connected)
             {
@@ -1216,16 +1215,6 @@ function rebuildMazeMesh(maze, device)
                     x: Math.floor(pacman.tileX),
                     y: Math.floor(pacman.tileY)
                 });
-            }
-
-            const allCollected = coins.every(c => c.collected);
-
-            if (allCollected && !levelTransition)
-            {
-                levelTransition = true;
-                levelTransitionTimer = PST_LEVEL_TRANSITION_DURATION;
-                ghostsHidden = true;
-                console.log('All coins collected! Waiting for level up...');
             }
         }
     }
@@ -1241,7 +1230,10 @@ function rebuildMazeMesh(maze, device)
 
             if (!superCoin.collected)
             {
-                const dist = Math.sqrt(Math.pow(pacman.tileX + 0.5 - superCoin.x - 0.5, 2) + Math.pow(pacman.tileY + 0.5 - superCoin.y - 0.5, 2));
+                const dist = Math.sqrt(
+                    Math.pow(pacman.tileX + 0.5 - superCoin.x - 0.5, 2) +
+                    Math.pow(pacman.tileY + 0.5 - superCoin.y - 0.5, 2)
+                );
 
                 if (dist < 0.8)
                 {
@@ -1358,13 +1350,9 @@ function rebuildMazeMesh(maze, device)
         }).length;
 
         if (isWinner)
-        {
             scoreEl.textContent = `${nickname} | Score: ${score} | WINNER!`;
-        }
         else
-        {
             scoreEl.textContent = `${nickname} | Score: ${score} | Players: ${playerCount + 1} | Special: ${remainingSuperCoins}`;
-        }
         levelEl.textContent = `Level: ${currentLevel}/${maxLevel}`;
 
         if (!gameOver && !isWinner)
@@ -1410,6 +1398,8 @@ function rebuildMazeMesh(maze, device)
 
     function loop()
     {
+        frameCount++;
+        
         const now = performance.now();
         const dt = Math.min((now - lastTime) / 1000, 0.1);
 
@@ -1423,9 +1413,7 @@ function rebuildMazeMesh(maze, device)
                 showWinnerScreen = false;
 
                 if (socket && socket.connected)
-                {
                     socket.emit('resetGame');
-                }
             }
             updateUI();
             requestAnimationFrame(loop);
@@ -1516,9 +1504,10 @@ function rebuildMazeMesh(maze, device)
 
             if (socket && socket.connected && !isDying)
             {
-                score += 10;
                 socket.emit('move', {
                     pacman: { x: pacman.tileX, y: pacman.tileY },
+                    dirX: pacman.dirX,
+                    dirY: pacman.dirY,
                     score,
                     lives,
                     level: currentLevel
@@ -1631,6 +1620,9 @@ function rebuildMazeMesh(maze, device)
             }
         }
 
+        const uniformData = new Float32Array(20);
+        let playerCounter = 0;
+
         for (const id in remotePlayers)
         {
             const rp = remotePlayers[id];
@@ -1638,45 +1630,54 @@ function rebuildMazeMesh(maze, device)
             if (!rp || !rp.pacman || typeof rp.pacman.x !== 'number' || typeof rp.pacman.y !== 'number')
             {
                 removeNicknameLabel(id);
+                cleanupPlayerBuffers(id);
                 continue;
             }
 
             if (rp.level !== undefined && rp.level !== currentLevel)
                 continue;
 
-            const isWinnerPlayer = rp.isWinner || false;
+            playerCounter++;
+            
+            const colorIdx = playerCounter % playerColors.length;
+            
+            const buffers = getPlayerBuffers(id);
 
-            const colorIdx = hashCode(id) % PST_MAX_PLAYERS;
+            model.fill(0);
+            const scale = rp.isWinner ? 0.6 : 0.45;
+            model[0] = scaleX * scale;
+            model[5] = scaleY * scale;
+            model[10] = 1;
+            model[15] = 1;
+            model[12] = (rp.pacman.x + 0.5) * scaleX - 1;
+            model[13] = (rp.pacman.y + 0.5) * scaleY - 1;
 
-            if (colorIdx < playerUBs.length)
-            {
-                model.fill(0);
-                const scale = isWinnerPlayer ? 0.6 : 0.45;
-                model[0] = scaleX * scale;
-                model[5] = scaleY * scale;
-                model[10] = 1;
-                model[15] = 1;
-                model[12] = (rp.pacman.x + 0.5) * scaleX - 1;
-                model[13] = (rp.pacman.y + 0.5) * scaleY - 1;
+            for (let i = 0; i < 16; i++)
+                uniformData[i] = model[i];
 
-                device.queue.writeBuffer(playerUBs[colorIdx], 0, model);
-                pass.setPipeline(playerPipelines[colorIdx]);
-                pass.setBindGroup(0, playerBGs[colorIdx]);
-                pass.setVertexBuffer(0, playerVBO);
-                pass.setIndexBuffer(playerIBO, 'uint16');
-                pass.drawIndexed(playerPrim.indices.length);
-            }
+            const color = playerColors[colorIdx % playerColors.length];
+            uniformData[16] = color[0];
+            uniformData[17] = color[1];
+            uniformData[18] = color[2];
+            uniformData[19] = 0;
+
+            device.queue.writeBuffer(buffers.ub, 0, uniformData);
+            pass.setPipeline(playerPipeline);
+            pass.setBindGroup(0, buffers.bg);
+            pass.setVertexBuffer(0, playerVBO);
+            pass.setIndexBuffer(playerIBO, 'uint16');
+            pass.drawIndexed(playerPrim.indices.length);
 
             const mouthOpen = Math.abs(Math.sin(Date.now() / 200)) * 0.8;
-            const frame = getPacmanFrame(1, 0, mouthOpen);
+            const dirX = (typeof rp.dirX === 'number') ? rp.dirX : 1;
+            const dirY = (typeof rp.dirY === 'number') ? rp.dirY : 0;
+            const frame = getPacmanFrame(dirX, dirY, mouthOpen);
 
             if (pacmanFrames[frame])
             {
-                pacmanFrames[frame].draw(
-                    device, pass, scaleX, scaleY,
-                    rp.pacman.x + 0.5, rp.pacman.y + 0.5,
-                    0, isWinnerPlayer ? 0.7 : 0.55, isWinnerPlayer ? 0.7 : 0.55, 0
-                );
+                pacmanFrames[frame].draw(device, pass, scaleX, scaleY,
+                                rp.pacman.x + 0.5, rp.pacman.y + 0.5,
+                                0, rp.isWinner ? 0.7 : 0.55, rp.isWinner ? 0.7 : 0.55, 0);
             }
 
             updateNicknameLabel(id, rp);
@@ -1687,13 +1688,9 @@ function rebuildMazeMesh(maze, device)
         for (const id in nicknameLabels)
         {
             if (!activeIds.has(id))
-            {
                 removeNicknameLabel(id);
-            }
             else if (remotePlayers[id] && remotePlayers[id].level !== undefined && remotePlayers[id].level !== currentLevel)
-            {
                 removeNicknameLabel(id);
-            }
         }
 
         if (serverFruit && serverFruit.alive && fruitSprites[serverFruit.name])
@@ -1719,14 +1716,11 @@ function rebuildMazeMesh(maze, device)
         updateUI();
         requestAnimationFrame(loop);
     }
-    console.log('PST: Maze ready', maze.width, 'x', maze.height);
+    
     gameReady = true;
     
     if (socket.connected)
-    {
-        console.log('Sending initial register...');
         socket.emit('register', { nickname: nickname });
-    }
     
     loop();
 })();
